@@ -71,6 +71,89 @@ class PreferEnumShorthandRule extends DartLintRule {
         );
       }
     });
+
+    // Obsługuj ArgumentList dla named arguments: filter: ImageFilter.blur(...)
+    context.registry.addArgumentList((node) {
+      _checkArgumentList(node, reporter);
+    });
+  }
+
+  void _checkArgumentList(ArgumentList node, DiagnosticReporter reporter) {
+    for (final argument in node.arguments) {
+      final expression = switch (argument) {
+        NamedExpression(:final expression) => expression,
+        _ => argument,
+      };
+
+      // Skip if already using dot-shorthand
+      if (_isDotShorthand(expression)) continue;
+
+      final parameter = argument.correspondingParameter;
+      final paramType = parameter?.type;
+      if (paramType == null) continue;
+
+      // Sprawdzić czy expression powinien być suggerir
+      if (_shouldSuggestShorthandForExpression(expression, paramType)) {
+        reporter.atNode(expression, code);
+      }
+    }
+  }
+
+  bool _isDotShorthand(Expression expr) {
+    // Sprawdzenie czy wyrażenie już używa dot-shorthand
+    // np. .all(...) zamiast Border.all(...)
+    if (expr is MethodInvocation) {
+      return expr.target == null || _isDotShorthand(expr.target!);
+    }
+    if (expr is PrefixedIdentifier) {
+      return expr.prefix.name.isEmpty;
+    }
+    return false;
+  }
+
+  bool _shouldSuggestShorthandForExpression(
+    Expression expression,
+    DartType paramType,
+  ) {
+    // Sprawdzenie czy wyrażenie można zasugerować do skrócenia
+    final expressionType = expression.staticType;
+    if (expressionType == null) return false;
+
+    // Dla MethodInvocation (ImageFilter.blur, Border.all)
+    if (expression is MethodInvocation) {
+      final target = expression.target;
+      String? prefixName;
+
+      if (target is SimpleIdentifier) {
+        prefixName = target.name;
+      } else if (target is PrefixedIdentifier) {
+        prefixName = target.prefix.name;
+      } else {
+        return false;
+      }
+
+      // Nazwa zwracanego typu musi zgadzać się z prefiksem
+      if (expressionType.element?.name != prefixName) {
+        return false;
+      }
+
+      // Sprawdzenie czy typ jest zgodny
+      if (expressionType == paramType) return true;
+      if (_isAssignableTo(expressionType, paramType)) return true;
+    }
+
+    // Dla PrefixedIdentifier (Border.all bez invoacji)
+    if (expression is PrefixedIdentifier) {
+      final prefixName = expression.prefix.name;
+      if (expressionType.element?.name != prefixName) {
+        return false;
+      }
+
+      if (expressionType == paramType) return true;
+      if (_isAssignableTo(expressionType, paramType)) return true;
+    }
+
+    return false;
   }
 
   bool _shouldSuggestShorthand(PrefixedIdentifier node) {
