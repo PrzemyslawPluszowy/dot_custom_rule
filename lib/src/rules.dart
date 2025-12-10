@@ -140,8 +140,26 @@ class PreferEnumShorthandRule extends DartLintRule {
     final contextType = _getContextTypeForNode(node);
     if (contextType == null) return false;
 
+    // Dopuszczamy dokładne dopasowanie lub subtype (np. Border <: BoxBorder)
     if (contextType == returnType) return true;
+    if (_isAssignableTo(returnType, contextType)) return true;
     if (_typeHasStaticMember(contextType, methodName)) return true;
+
+    return false;
+  }
+
+  bool _isAssignableTo(DartType? source, DartType? target) {
+    if (source == null || target == null) return false;
+    if (source == target) return true;
+
+    // Sprawdzenie czy source jest subtype'em target
+    // np. Border <: BoxBorder
+    if (source is InterfaceType && target is InterfaceType) {
+      // Sprawdzamy czy source.element jest subtype'em target.element
+      return source.element.allSupertypes.any((supertype) {
+        return supertype.element == target.element;
+      });
+    }
 
     return false;
   }
