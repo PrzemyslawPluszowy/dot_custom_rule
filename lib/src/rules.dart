@@ -147,32 +147,21 @@ class PreferEnumShorthandRule extends DartLintRule {
     final returnType = node.staticType;
     if (returnType == null) return false;
 
-    // Sprawdzenie czy typ zwracany odpowiada nazwie prefiksu
-    // Dla ImageFilter.blur() -> returnType to ImageFilter
-    // Ale mogą być różne warianty: może być ImageFilter lub ImageFilter?
-    final returnTypeNameMatches = returnType.element?.name == prefixName;
-    
+    // Kluczowe: nazwa zwracanego typu musi zgadzać się z prefiksem
+    // Border.all() -> returnType.element?.name == "Border"
+    // Colors.red -> returnType.element?.name == "Color" != "Colors" -> NIE sugerujemy
+    if (returnType.element?.name != prefixName) {
+      return false;
+    }
+
     // Sprawdzenie kontekstu
     final contextType = _getContextTypeForNode(node);
     if (contextType == null) return false;
 
     // Jeśli typ się zgadza i kontekst pozwala, sugerujemy
-    if (returnTypeNameMatches) {
-      if (contextType == returnType) return true;
-      if (_isAssignableTo(returnType, contextType)) return true;
-    }
-
-    // Alternatywa: jeśli zwracany typ jest przypisywalny do oczekiwanego
-    // (np. Border <: BoxBorder), również sugerujemy
-    if (_isAssignableTo(returnType, contextType)) {
-      return true;
-    }
-
-    // Ostatnia szansa: sprawdzamy czy kontekst ma statyczną metodę
-    // o tej samej nazwie co nasza metoda
-    if (_typeHasStaticMember(contextType, methodName)) {
-      return true;
-    }
+    if (contextType == returnType) return true;
+    if (_isAssignableTo(returnType, contextType)) return true;
+    if (_typeHasStaticMember(contextType, methodName)) return true;
 
     return false;
   }
