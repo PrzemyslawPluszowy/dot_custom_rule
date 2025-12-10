@@ -61,6 +61,16 @@ class PreferEnumShorthandRule extends DartLintRule {
         );
       }
     });
+
+    // Obsługuj też MethodInvocation: Border.all(...), ImageFilter.blur(...)
+    context.registry.addMethodInvocation((node) {
+      if (_shouldSuggestShorthandForMethodInvocation(node)) {
+        reporter.atNode(
+          node,
+          code,
+        );
+      }
+    });
   }
 
   bool _shouldSuggestShorthand(PrefixedIdentifier node) {
@@ -104,6 +114,34 @@ class PreferEnumShorthandRule extends DartLintRule {
     if (_typeHasStaticMember(contextType, identifierName)) {
       return true;
     }
+
+    return false;
+  }
+
+  bool _shouldSuggestShorthandForMethodInvocation(MethodInvocation node) {
+    // Obsługuje: Border.all(...) -> .all(...), ImageFilter.blur(...) -> .blur(...)
+    final target = node.target;
+    if (target is! PrefixedIdentifier) return false;
+
+    final prefixName = target.prefix.name;
+    final methodName = node.methodName.name;
+
+    // Sprawdzenie składni: WielkaLitera.malaLitera
+    if (prefixName.isEmpty || methodName.isEmpty) return false;
+    if (prefixName[0].toUpperCase() != prefixName[0]) return false;
+    if (methodName[0].toLowerCase() != methodName[0]) return false;
+
+    // Typ zwracany musi odpowiadać nazwie klasy
+    final returnType = node.staticType;
+    if (returnType == null) return false;
+    if (returnType.element?.name != prefixName) return false;
+
+    // Sprawdzenie kontekstu
+    final contextType = _getContextTypeForNode(node);
+    if (contextType == null) return false;
+
+    if (contextType == returnType) return true;
+    if (_typeHasStaticMember(contextType, methodName)) return true;
 
     return false;
   }
@@ -180,6 +218,66 @@ class PreferEnumShorthandRule extends DartLintRule {
     // Instrukcja `return`: `return MyEnum.value;`
     if (parent is ReturnStatement) {
       // Szukamy otaczającej funkcji/metody, aby odczytać zadeklarowany typ zwracany
+      final functionBody = parent.thisOrAncestorOfType<FunctionBody>();
+      final function = functionBody?.parent;
+      if (function is FunctionDeclaration) {
+        return function.returnType?.type;
+      } else if (function is MethodDeclaration) {
+        return function.returnType?.type;
+      }
+    }
+
+    return null;
+  }
+
+  DartType? _getContextTypeForNode(AstNode node) {
+    // Uniwersalna wersja dla dowolnego AstNode (PrefixedIdentifier, MethodInvocation, itp.)
+    final parent = node.parent;
+
+    // Named argument
+    if (parent is NamedExpression) {
+      return parent.element?.type;
+    }
+
+    // Szukamy w przodkach NamedExpression lub MethodInvocation
+    var ancestor = node.parent;
+    while (ancestor != null) {
+      if (ancestor is NamedExpression) {
+        return ancestor.element?.type;
+      }
+      ancestor = ancestor.parent;
+    }
+
+    // Deklaracja zmiennej
+    if (parent is VariableDeclaration) {
+      final parentList = parent.parent;
+      if (parentList is VariableDeclarationList) {
+        final typeAnnotation = parentList.type;
+        if (typeAnnotation != null) {
+          final t = typeAnnotation.type;
+          if (t != null) return t;
+        }
+      }
+      try {
+        final Element? declared = parent.declaredFragment?.element;
+        if (declared is VariableElement) return declared.type;
+      } on Object catch (_) {}
+      return null;
+    }
+
+    // Przypisanie
+    if (parent is AssignmentExpression) {
+      if (parent.rightHandSide == node) {
+        final writeElement = parent.writeElement;
+        if (writeElement is VariableElement) {
+          return writeElement.type;
+        }
+        return parent.leftHandSide.staticType;
+      }
+    }
+
+    // Return statement
+    if (parent is ReturnStatement) {
       final functionBody = parent.thisOrAncestorOfType<FunctionBody>();
       final function = functionBody?.parent;
       if (function is FunctionDeclaration) {
