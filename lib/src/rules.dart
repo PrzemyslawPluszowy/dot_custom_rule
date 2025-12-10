@@ -83,14 +83,8 @@ class PreferEnumShorthandRule extends DartLintRule {
     // np. Colors.red (typ Color != Colors) -> nie sugerujemy
     // np. Sizes.p2 (typ double != Sizes) -> nie sugerujemy
     // np. MyEnum.value (typ MyEnum == MyEnum) -> możemy zasugerować
+    // np. ImageFilter.blur() (typ ImageFilter == ImageFilter) -> możemy zasugerować
     if (expressionType.element?.name != prefixName) {
-      return false;
-    }
-
-    // 2a. Walidacja: prefiks musi być EnumElement, nie zwykłą klasą
-    // Filtruje singleton-y takie jak GetIt.instance, Colors.red, itp.
-    // Zasugeruj skrót TYLKO dla wartości enum-u
-    if (expressionType.element is! EnumElement) {
       return false;
     }
 
@@ -102,6 +96,7 @@ class PreferEnumShorthandRule extends DartLintRule {
 
     // Jeżeli oczekiwany typ jest dokładnie takim samym typem jak wyrażenie,
     // użycie skrótu jest bezpieczne.
+    // Obejmuje to enumy, statyczne metody, konstruktory itp.
     if (contextType == expressionType) return true;
 
     // Jeżeli kontekstowy typ jest inny (np. typ bazowy), sprawdź, czy ma
@@ -115,14 +110,36 @@ class PreferEnumShorthandRule extends DartLintRule {
 
   DartType? _getContextType(PrefixedIdentifier node) {
     // Próba pobrania typu z kontekstu (np. parametrów, deklaracji zmiennej, przypisania itp.)
-    // Uwaga: nowsze wersje analizatora mają `staticParameterElement` na Expression,
-    // ale `PrefixedIdentifier` też jest Expression i nie zawsze będzie to dostępne.
-    // W razie braku informacji sprawdzamy rodzica i wyciągamy typ w bezpieczny sposób.
 
     final parent = node.parent;
+
+    // Named argument: filter: ImageFilter.blur(...) lub padding: EdgeInsets.all(...)
     if (parent is NamedExpression) {
       return parent.element?.type;
     }
+
+    // Jeśli node jest wewnątrz MethodInvocation (dla named arguments w wywołaniu)
+    var ancestor = node.parent;
+    while (ancestor != null) {
+      if (ancestor is NamedExpression) {
+        return ancestor.element?.type;
+      }
+      if (ancestor is MethodInvocation) {
+        // Sprawdź czy któryś z named arguments zawiera nasz node
+        for (final arg in ancestor.argumentList.arguments) {
+          if (arg is NamedExpression) {
+            // Sprawdzamy czy nasz node jest dzieckiem tego wyrażenia
+            final nodeAncestor =
+                node.thisOrAncestorMatching((n) => n == arg.expression);
+            if (nodeAncestor != null) {
+              return arg.element?.type;
+            }
+          }
+        }
+      }
+      ancestor = ancestor.parent;
+    }
+
     // Positional argument?
     if (parent is ArgumentList) {
       // This is harder without staticParameterElement on node.
@@ -142,8 +159,12 @@ class PreferEnumShorthandRule extends DartLintRule {
         }
       }
 
-      // Brak jawnie annotowanego typu — nie sugeruj skrótu
-      // Wnioskowanie typu (np. z wartości) nie jest wystarczającym kontekstem
+      // Fallback: spróbuj odczytać element zmiennej (stare API `declaredElement`).
+      // Jest to oznaczone jako deprecated, ale daje nam jawny typ zamiast `dynamic`.
+      try {
+        final Element? declared = parent.declaredFragment?.element;
+        if (declared is VariableElement) return declared.type;
+      } on Object catch (_) {}
       return null;
     }
 
@@ -174,7 +195,6 @@ class PreferEnumShorthandRule extends DartLintRule {
   bool _typeHasStaticMember(DartType type, String memberName) {
     if (type is InterfaceType) {
       final element = type.element;
-      // Check static fields/getters
       // Sprawdź statyczne pola/gettery
       final getter = element.getGetter(memberName);
       if (getter != null && getter.isStatic) return true;
