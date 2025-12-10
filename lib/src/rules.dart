@@ -121,9 +121,21 @@ class PreferEnumShorthandRule extends DartLintRule {
   bool _shouldSuggestShorthandForMethodInvocation(MethodInvocation node) {
     // Obsługuje: Border.all(...) -> .all(...), ImageFilter.blur(...) -> .blur(...)
     final target = node.target;
-    if (target is! PrefixedIdentifier) return false;
 
-    final prefixName = target.prefix.name;
+    // Target może być PrefixedIdentifier (Border.all) lub null (implicit this.all)
+    if (target == null) return false; // Implicit this
+
+    String? prefixName;
+    if (target is PrefixedIdentifier) {
+      prefixName = target.prefix.name;
+    } else if (target is SimpleIdentifier) {
+      // To może być Static class method access: Border.all()
+      // W tym wypadku target to właśnie SimpleIdentifier "Border"
+      prefixName = target.name;
+    } else {
+      return false;
+    }
+
     final methodName = node.methodName.name;
 
     // Sprawdzenie składni: WielkaLitera.malaLitera
@@ -252,16 +264,18 @@ class PreferEnumShorthandRule extends DartLintRule {
     // Uniwersalna wersja dla dowolnego AstNode (PrefixedIdentifier, MethodInvocation, itp.)
     final parent = node.parent;
 
-    // Named argument
+    // Named argument: bezpośrednio sprawdzamy typ parametru
     if (parent is NamedExpression) {
-      return parent.element?.type;
+      final paramType = parent.element?.type;
+      if (paramType != null) return paramType;
     }
 
-    // Szukamy w przodkach NamedExpression lub MethodInvocation
+    // Szukamy w przodkach NamedExpression
     var ancestor = node.parent;
     while (ancestor != null) {
       if (ancestor is NamedExpression) {
-        return ancestor.element?.type;
+        final paramType = ancestor.element?.type;
+        if (paramType != null) return paramType;
       }
       ancestor = ancestor.parent;
     }
