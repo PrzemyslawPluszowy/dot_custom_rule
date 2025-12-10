@@ -1,0 +1,17 @@
+name: dot_shorthand_custom_lint
+description: Dot Shorthand Custom Lint - reguły lintujące dotyczące "dot-shorthand".
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  analyzer: ^8.0.0
+  analyzer_plugin: ^0.13.0
+
+  custom_lint_builder: ^0.8.1
+
+dev_dependencies:
+  lints: ^3.0.0
+  test: ^1.24.0

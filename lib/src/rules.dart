@@ -1,0 +1,189 @@
+import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/type.dart';
+import 'package:analyzer/error/listener.dart';
+import 'package:custom_lint_builder/custom_lint_builder.dart';
+
+/// Reguła lintera: Unikaj zagnieżdżonych skrótów z kropką
+class AvoidNestedShorthandsRule extends DartLintRule {
+  const AvoidNestedShorthandsRule()
+      : super(
+          code: const LintCode(
+            name: 'avoid_nested_shorthands',
+            problemMessage:
+                'Nested dot-shorthands are forbidden (e.g., .new(.new(.new()))). '
+                'Use fully qualified names or single-level shorthand only.',
+          ),
+        );
+
+  @override
+  void run(
+    CustomLintResolver resolver,
+    DiagnosticReporter reporter,
+    CustomLintContext context,
+  ) {
+    context.registry.addMethodInvocation((node) {
+      final nodeText = node.toString();
+      if (_hasNestedShorthand(nodeText)) {
+        reporter.atNode(node, code);
+      }
+    });
+  }
+
+  bool _hasNestedShorthand(String text) {
+    final dotShorthandPattern = RegExp(r'\.\w+\(\s*\.\w+\s*\(');
+    return dotShorthandPattern.hasMatch(text);
+  }
+}
+
+/// Reguła lintera: Preferuj skrót z kropką (dot-shorthand)
+class PreferEnumShorthandRule extends DartLintRule {
+  const PreferEnumShorthandRule()
+      : super(
+          code: const LintCode(
+            name: 'prefer_enum_shorthand',
+            problemMessage:
+                'Consider using dot-shorthand: use .value instead of Type.value',
+          ),
+        );
+
+  @override
+  void run(
+    CustomLintResolver resolver,
+    DiagnosticReporter reporter,
+    CustomLintContext context,
+  ) {
+    context.registry.addPrefixedIdentifier((node) {
+      if (_shouldSuggestShorthand(node)) {
+        reporter.atNode(
+          node,
+          code,
+        );
+      }
+    });
+  }
+
+  bool _shouldSuggestShorthand(PrefixedIdentifier node) {
+    // 1. Podstawowe sprawdzenie składni: WielkaLitera.malaLitera
+    final prefixName = node.prefix.name;
+    final identifierName = node.identifier.name;
+    if (prefixName.isEmpty || identifierName.isEmpty) return false;
+    if (prefixName[0].toUpperCase() != prefixName[0]) {
+      return false; // Prefiks nie zaczyna się od wielkiej litery
+    }
+    if (identifierName[0].toLowerCase() != identifierName[0]) {
+      return false; // Identyfikator nie zaczyna się od małej litery
+    }
+
+    // 2. Sprawdzenie typu: typ wyrażenia musi odpowiadać nazwie prefiksu
+    final expressionType = node.staticType;
+    if (expressionType == null) return false;
+    // Jeśli nazwa typu nie zgadza się z prefiksem, to prawdopodobnie
+    // chodzi o statyczne pole/konstantę innej klasy
+    // np. Colors.red (typ Color != Colors) -> nie sugerujemy
+    // np. Sizes.p2 (typ double != Sizes) -> nie sugerujemy
+    // np. MyEnum.value (typ MyEnum == MyEnum) -> możemy zasugerować
+    if (expressionType.element?.name != prefixName) {
+      return false;
+    }
+
+    // 3. Sprawdzenie kontekstu: oczekiwany typ musi pozwalać na skrót
+    final contextType = _getContextType(node);
+    if (contextType == null) {
+      return false; // Konserwatywnie: jeżeli brak kontekstu, nie sugerujemy
+    }
+
+    // Jeżeli oczekiwany typ jest dokładnie takim samym typem jak wyrażenie,
+    // użycie skrótu jest bezpieczne.
+    if (contextType == expressionType) return true;
+
+    // Jeżeli kontekstowy typ jest inny (np. typ bazowy), sprawdź, czy ma
+    // statyczny członek o tej samej nazwie — wtedy też można zasugerować.
+    if (_typeHasStaticMember(contextType, identifierName)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  DartType? _getContextType(PrefixedIdentifier node) {
+    // Próba pobrania typu z kontekstu (np. parametrów, deklaracji zmiennej, przypisania itp.)
+    // Uwaga: nowsze wersje analizatora mają `staticParameterElement` na Expression,
+    // ale `PrefixedIdentifier` też jest Expression i nie zawsze będzie to dostępne.
+    // W razie braku informacji sprawdzamy rodzica i wyciągamy typ w bezpieczny sposób.
+
+    final parent = node.parent;
+    if (parent is NamedExpression) {
+      return parent.element?.type;
+    }
+    // Positional argument?
+    if (parent is ArgumentList) {
+      // This is harder without staticParameterElement on node.
+      // But let's skip for now if not available.
+    }
+
+    // Deklaracja zmiennej: `final MyEnum e = MyEnum.value;`
+    if (parent is VariableDeclaration) {
+      // Jeśli deklaracja jawnie podaje typ: `final MyEnum e = ...;`,
+      // można odczytać go z rodzica `VariableDeclarationList.type`.
+      final parentList = parent.parent;
+      if (parentList is VariableDeclarationList) {
+        final typeAnnotation = parentList.type;
+        if (typeAnnotation != null) {
+          final t = typeAnnotation.type;
+          if (t != null) return t;
+        }
+      }
+
+      // Fallback: spróbuj odczytać element zmiennej (stare API `declaredElement`).
+      // Jest to oznaczone jako deprecated, ale daje nam jawny typ zamiast `dynamic`.
+      try {
+        final Element? declared = parent.declaredFragment?.element;
+        if (declared is VariableElement) return declared.type;
+      } on Object catch (_) {}
+      return null;
+    }
+
+    // Przypisanie: `x = MyEnum.value;`
+    if (parent is AssignmentExpression && parent.rightHandSide == node) {
+      final writeElement = parent.writeElement;
+      if (writeElement is VariableElement) {
+        return writeElement.type;
+      }
+      return parent.leftHandSide.staticType;
+    }
+
+    // Instrukcja `return`: `return MyEnum.value;`
+    if (parent is ReturnStatement) {
+      // Szukamy otaczającej funkcji/metody, aby odczytać zadeklarowany typ zwracany
+      final functionBody = parent.thisOrAncestorOfType<FunctionBody>();
+      final function = functionBody?.parent;
+      if (function is FunctionDeclaration) {
+        return function.returnType?.type;
+      } else if (function is MethodDeclaration) {
+        return function.returnType?.type;
+      }
+    }
+
+    return null;
+  }
+
+  bool _typeHasStaticMember(DartType type, String memberName) {
+    if (type is InterfaceType) {
+      final element = type.element;
+      // Check static fields/getters
+      // Sprawdź statyczne pola/gettery
+      final getter = element.getGetter(memberName);
+      if (getter != null && getter.isStatic) return true;
+      final method = element.getMethod(memberName);
+      if (method != null && method.isStatic) return true;
+
+      // Sprawdź stałe/enumy
+      if (element is EnumElement) {
+        final field = element.getField(memberName);
+        if (field != null) return true;
+      }
+    }
+    return false;
+  }
+}
