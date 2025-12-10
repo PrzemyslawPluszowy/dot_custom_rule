@@ -87,6 +87,13 @@ class PreferEnumShorthandRule extends DartLintRule {
       return false;
     }
 
+    // 2a. Walidacja: prefiks musi być EnumElement, nie zwykłą klasą
+    // Filtruje singleton-y takie jak GetIt.instance, Colors.red, itp.
+    // Zasugeruj skrót TYLKO dla wartości enum-u
+    if (expressionType.element is! EnumElement) {
+      return false;
+    }
+
     // 3. Sprawdzenie kontekstu: oczekiwany typ musi pozwalać na skrót
     final contextType = _getContextType(node);
     if (contextType == null) {
@@ -135,12 +142,8 @@ class PreferEnumShorthandRule extends DartLintRule {
         }
       }
 
-      // Fallback: spróbuj odczytać element zmiennej (stare API `declaredElement`).
-      // Jest to oznaczone jako deprecated, ale daje nam jawny typ zamiast `dynamic`.
-      try {
-        final Element? declared = parent.declaredFragment?.element;
-        if (declared is VariableElement) return declared.type;
-      } on Object catch (_) {}
+      // Brak jawnie annotowanego typu — nie sugeruj skrótu
+      // Wnioskowanie typu (np. z wartości) nie jest wystarczającym kontekstem
       return null;
     }
 
